@@ -31,7 +31,6 @@ export const MATERIAL_VISIBLE_VALUES: Record<string, Record<string, unknown>> = 
   Canvas: { finish: 'Matte', baseColor: '#ded8cb', specTint: 0.03, bump: 1.7, bumpTiling: 3 },
 };
 
-// The removed holographic/PBR controls are now driven internally by presets.
 export const MATERIAL_ENGINE_VALUES: Record<string, Record<string, number>> = {
   Polyester: { holoIntensity: 0, holoScale: 80, bandFreq: 1, saturation: 0, hueShift: 0, sparkle: 0, iridescence: 0, metalness: 0.02, sheen: 0.16 },
   Cotton: { holoIntensity: 0, holoScale: 80, bandFreq: 1, saturation: 0, hueShift: 0, sparkle: 0, iridescence: 0, metalness: 0, sheen: 0.22 },
@@ -43,10 +42,10 @@ export const MATERIAL_ENGINE_VALUES: Record<string, Record<string, number>> = {
 };
 
 export const PHYSICS_VISIBLE_VALUES: Record<string, Record<string, unknown>> = {
-  'Silk flag': { viscosity: 0.12, stiffness: 0.68, iterations: 9, smoothing: 0.018, gravity: 0.42, windStrength: 0.62, windTurbulence: 0.58, pinLeft: true },
-  'Heavy cotton banner': { viscosity: 0.42, stiffness: 0.95, iterations: 14, smoothing: 0.06, gravity: 0.72, windStrength: 0.38, windTurbulence: 0.24, pinLeft: true },
-  Vinyl: { viscosity: 0.28, stiffness: 1, iterations: 14, smoothing: 0.035, gravity: 0.58, windStrength: 0.34, windTurbulence: 0.14, pinLeft: true },
-  'Thin football flag': { viscosity: 0.08, stiffness: 0.78, iterations: 10, smoothing: 0.012, gravity: 0.34, windStrength: 0.78, windTurbulence: 0.88, pinLeft: true },
+  'Silk flag': { viscosity: 0.12, stiffness: 0.68, iterations: 9, smoothing: 0.018, flatness: 0.58, gravity: 0.42, windStrength: 0.62, windWaveStrength: 0.95, windWaveFrequency: 3.5, windTurbulence: 0.38 },
+  'Heavy cotton banner': { viscosity: 0.42, stiffness: 0.95, iterations: 14, smoothing: 0.06, flatness: 0.78, gravity: 0.72, windStrength: 0.38, windWaveStrength: 0.55, windWaveFrequency: 2.25, windTurbulence: 0.18 },
+  Vinyl: { viscosity: 0.28, stiffness: 1, iterations: 14, smoothing: 0.035, flatness: 0.9, gravity: 0.58, windStrength: 0.34, windWaveStrength: 0.42, windWaveFrequency: 1.75, windTurbulence: 0.1 },
+  'Thin football flag': { viscosity: 0.08, stiffness: 0.78, iterations: 10, smoothing: 0.012, flatness: 0.66, gravity: 0.34, windStrength: 0.78, windWaveStrength: 0.9, windWaveFrequency: 3, windTurbulence: 0.52 },
 };
 
 export const PHYSICS_ENGINE_VALUES: Record<string, Record<string, number>> = {
