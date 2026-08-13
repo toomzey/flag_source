@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { BAKED_POSE } from './bakedPose.ts';
 
 export interface ClothPhysicsParams {
   /** 0..0.6 — how quickly motion dies away. */
@@ -15,6 +14,9 @@ export interface ClothPhysicsParams {
   gravity?: number;
   windStrength?: number;
   windTurbulence?: number;
+  windWaveStrength?: number;
+  windWaveFrequency?: number;
+  flatness?: number;
   structuralStrength?: number;
   shearStrength?: number;
   bendStrength?: number;
@@ -33,11 +35,13 @@ const MAX_SUBSTEPS = 4;
 const STRUCTURAL = 0;
 const SHEAR = 1;
 const BEND = 2;
+const TAU = Math.PI * 2;
 
 /**
- * Verlet cloth simulation adapted for a flag: the left edge can be pinned,
- * gravity pulls the fabric down and a continuously varying wind field pushes
- * it out of plane. The original direct-manipulation grab behaviour remains.
+ * Verlet cloth simulation adapted for a flag. The left edge can be pinned,
+ * gravity pulls down and wind drives travelling waves through the fabric.
+ * When the user is not grabbing the cloth, a weak planar recovery keeps the
+ * flag broad and readable instead of allowing it to fold through itself.
  */
 export class ClothSim {
   readonly cols: number;
@@ -46,17 +50,12 @@ export class ClothSim {
   readonly positions: Float32Array;
   private prev: Float32Array;
   private rest: Float32Array;
-
-  // Constraints as flat arrays: [ia, ib] pairs + rest length + base/type data.
   private cA: Int32Array;
   private cB: Int32Array;
   private cRest: Float32Array;
   private cMul: Float32Array;
   private cType: Uint8Array;
-
-  /** 4-neighborhood for laplacian smoothing: -1 padded. */
   private neighbors: Int32Array;
-
   private grab: GrabState | null = null;
   private accumulator = 0;
   private simTime = 0;
@@ -76,8 +75,6 @@ export class ClothSim {
 
     this.initPositions();
 
-    // Structural, shear and bend constraints are separated so flag presets
-    // can tune each response independently while keeping the original solver.
     const a: number[] = [];
     const b: number[] = [];
     const mul: number[] = [];
@@ -119,39 +116,18 @@ export class ClothSim {
     }
   }
 
-  /** Resample the original hand-arranged starting pose onto the active grid. */
   private initPositions() {
-    const bp = BAKED_POSE;
-    const bc = bp.cols;
-    const br = bp.rows;
-    const sx = this.width / bp.width;
-    const sy = this.height / bp.height;
-    const sz = (sx + sy) / 2;
     let k = 0;
-
     for (let y = 0; y < this.rows; y++) {
+      const v = y / Math.max(1, this.segY);
       for (let x = 0; x < this.cols; x++) {
-        const gu = (x / this.segX) * (bc - 1);
-        const gv = (y / this.segY) * (br - 1);
-        const x0 = Math.min(bc - 2, Math.floor(gu));
-        const y0 = Math.min(br - 2, Math.floor(gv));
-        const fx = gu - x0;
-        const fy = gv - y0;
-
-        for (let c = 0; c < 3; c++) {
-          const i00 = (y0 * bc + x0) * 3 + c;
-          const i10 = (y0 * bc + x0 + 1) * 3 + c;
-          const i01 = ((y0 + 1) * bc + x0) * 3 + c;
-          const i11 = ((y0 + 1) * bc + x0 + 1) * 3 + c;
-          const v0 = bp.data[i00] * (1 - fx) + bp.data[i10] * fx;
-          const v1 = bp.data[i01] * (1 - fx) + bp.data[i11] * fx;
-          const s = c === 0 ? sx : c === 1 ? sy : sz;
-          this.positions[k + c] = (v0 * (1 - fy) + v1 * fy) * s;
-        }
+        const u = x / Math.max(1, this.segX);
+        this.positions[k] = -this.width * 0.5 + u * this.width;
+        this.positions[k + 1] = this.height * 0.5 - v * this.height;
+        this.positions[k + 2] = 0;
         k += 3;
       }
     }
-
     this.prev.set(this.positions);
     this.rest.set(this.positions);
   }
@@ -176,7 +152,6 @@ export class ClothSim {
     this.simTime = 0;
   }
 
-  /** Give a random gentle impulse. */
   poke(strength = 0.5) {
     const p = this.positions;
     const ci = Math.floor(Math.random() * this.count);
@@ -200,7 +175,6 @@ export class ClothSim {
     }
   }
 
-  /** Begin a grab around a world-space point. Returns false if nothing is near. */
   startGrab(point: THREE.Vector3, radius: number): boolean {
     const p = this.positions;
     const indices: number[] = [];
@@ -246,7 +220,6 @@ export class ClothSim {
 
   private cavityScratch: Float32Array | null = null;
 
-  /** Compute a per-vertex concavity term used for fold shading. */
   computeCavity(normals: ArrayLike<number>, out: Float32Array, gain = 6) {
     const p = this.positions;
     const nb = this.neighbors;
@@ -300,6 +273,7 @@ export class ClothSim {
   private substep(params: ClothPhysicsParams) {
     const p = this.positions;
     const prev = this.prev;
+    const rest = this.rest;
     const n = this.count;
     this.simTime += SUBSTEP;
 
@@ -307,10 +281,12 @@ export class ClothSim {
     const gravity = params.gravity ?? 0;
     const windStrength = params.windStrength ?? 0;
     const turbulence = params.windTurbulence ?? 0;
+    const waveStrength = params.windWaveStrength ?? 0.75;
+    const waveFrequency = params.windWaveFrequency ?? 3;
+    const flatness = params.flatness ?? 0.55;
     const dt2 = SUBSTEP * SUBSTEP;
+    const passive = this.grab === null;
 
-    // Verlet integration plus external flag forces. Wind acts primarily out of
-    // plane and grows gently toward the free edge, producing a readable wave.
     for (let i = 0; i < n; i++) {
       const k = i * 3;
       const curX = p[k], curY = p[k + 1], curZ = p[k + 2];
@@ -323,22 +299,34 @@ export class ClothSim {
       const row = Math.floor(i / this.cols);
       const u = col / Math.max(1, this.cols - 1);
       const v = row / Math.max(1, this.rows - 1);
-      const wave = Math.sin(this.simTime * (3.5 + turbulence * 2.2) + v * 8.0 + u * 3.0);
-      const cross = Math.sin(this.simTime * 5.1 + v * 13.0 - u * 4.0);
-      const flutter = turbulence * (wave * 0.7 + cross * 0.3);
-      const edgeGain = 0.35 + u * 0.65;
-      const windZ = windStrength * edgeGain * (1.25 + flutter * 0.65);
-      const windY = windStrength * turbulence * wave * 0.12;
+      const travellingWave = Math.sin(u * waveFrequency * TAU - this.simTime * 4.2 + v * 0.65);
+      const flutterA = Math.sin(this.simTime * 7.1 + v * 14.0 - u * 5.0);
+      const flutterB = Math.sin(this.simTime * 11.3 - v * 9.0 + u * 12.0);
+      const flutter = turbulence * (flutterA * 0.65 + flutterB * 0.35);
+      const edgeGain = 0.22 + u * 0.78;
+      const windZ = windStrength * edgeGain * (0.95 + travellingWave * waveStrength * 0.72 + flutter * 0.28);
+      const windY = windStrength * (travellingWave * waveStrength * 0.08 + flutter * 0.06);
 
-      p[k] = curX + velX;
-      p[k + 1] = curY + velY + (-gravity * 2.2 + windY) * dt2;
-      p[k + 2] = curZ + velZ + windZ * 3.0 * dt2;
+      let forceX = 0;
+      let forceY = -gravity * 2.2 + windY;
+      let forceZ = windZ * 3.0;
+
+      if (passive && flatness > 0) {
+        const recover = flatness * 11.0;
+        forceX += (rest[k] - curX) * recover * 0.22;
+        forceY += (rest[k + 1] - curY) * recover * 0.16;
+        forceZ += (rest[k + 2] - curZ) * recover;
+      }
+
+      p[k] = curX + velX + forceX * dt2;
+      p[k + 1] = curY + velY + forceY * dt2;
+      p[k + 2] = curZ + velZ + forceZ * dt2;
     }
 
     this.applyPins(params.pinLeft ?? false);
 
     if (params.smoothing > 0) {
-      const k = params.smoothing * 0.5;
+      const smoothK = params.smoothing * 0.5;
       const nb = this.neighbors;
       for (let i = 0; i < n; i++) {
         if ((params.pinLeft ?? false) && i % this.cols === 0) continue;
@@ -351,9 +339,9 @@ export class ClothSim {
         }
         if (cnt === 0) continue;
         const inv = 1 / cnt;
-        p[i * 3] += (ax * inv - p[i * 3]) * k;
-        p[i * 3 + 1] += (ay * inv - p[i * 3 + 1]) * k;
-        p[i * 3 + 2] += (az * inv - p[i * 3 + 2]) * k;
+        p[i * 3] += (ax * inv - p[i * 3]) * smoothK;
+        p[i * 3 + 1] += (ay * inv - p[i * 3 + 1]) * smoothK;
+        p[i * 3 + 2] += (az * inv - p[i * 3 + 2]) * smoothK;
       }
       this.applyPins(params.pinLeft ?? false);
     }
@@ -388,6 +376,9 @@ export class ClothSim {
       this.applyGrab();
       this.applyPins(params.pinLeft ?? false);
     }
+
+    if (passive) this.applyPassiveBounds();
+    this.applyPins(params.pinLeft ?? false);
   }
 
   private applyPins(pinLeft: boolean) {
@@ -403,6 +394,29 @@ export class ClothSim {
       prev[i] = rest[i];
       prev[i + 1] = rest[i + 1];
       prev[i + 2] = rest[i + 2];
+    }
+  }
+
+  private applyPassiveBounds() {
+    const p = this.positions;
+    const prev = this.prev;
+    const minX = -this.width * 0.56;
+    const maxX = this.width * 0.62;
+    const minY = -this.height * 0.62;
+    const maxY = this.height * 0.62;
+    const minZ = -this.width * 0.48;
+    const maxZ = this.width * 0.48;
+    const ease = 0.16;
+
+    for (let i = 0; i < this.count; i++) {
+      if (i % this.cols === 0) continue;
+      const k = i * 3;
+      const tx = Math.min(maxX, Math.max(minX, p[k]));
+      const ty = Math.min(maxY, Math.max(minY, p[k + 1]));
+      const tz = Math.min(maxZ, Math.max(minZ, p[k + 2]));
+      if (tx !== p[k]) { p[k] += (tx - p[k]) * ease; prev[k] = p[k]; }
+      if (ty !== p[k + 1]) { p[k + 1] += (ty - p[k + 1]) * ease; prev[k + 1] = p[k + 1]; }
+      if (tz !== p[k + 2]) { p[k + 2] += (tz - p[k + 2]) * ease; prev[k + 2] = p[k + 2]; }
     }
   }
 
