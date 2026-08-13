@@ -38,10 +38,10 @@ const BEND = 2;
 const TAU = Math.PI * 2;
 
 /**
- * Verlet cloth simulation adapted for a flag. The left edge can be pinned,
- * gravity pulls down and wind drives travelling waves through the fabric.
- * When the user is not grabbing the cloth, a weak planar recovery keeps the
- * flag broad and readable instead of allowing it to fold through itself.
+ * Verlet cloth simulation adapted for a flag. The left edge stays pinned and
+ * passive airflow is biased from left to right. Travelling waves oscillate
+ * around the flat rest plane instead of continuously pushing the cloth to one
+ * side, so the untouched flag keeps a broad, readable profile.
  */
 export class ClothSim {
   readonly cols: number;
@@ -299,23 +299,31 @@ export class ClothSim {
       const row = Math.floor(i / this.cols);
       const u = col / Math.max(1, this.cols - 1);
       const v = row / Math.max(1, this.rows - 1);
-      const travellingWave = Math.sin(u * waveFrequency * TAU - this.simTime * 4.2 + v * 0.65);
+
+      // Coherent waves travel from the pinned edge (u=0) toward the free edge.
+      // There is deliberately no constant Z offset: depth movement oscillates
+      // around the flag plane instead of continuously folding it one way.
+      const travellingWave = Math.sin(u * waveFrequency * TAU - this.simTime * 4.2 + v * 0.4);
       const flutterA = Math.sin(this.simTime * 7.1 + v * 14.0 - u * 5.0);
       const flutterB = Math.sin(this.simTime * 11.3 - v * 9.0 + u * 12.0);
       const flutter = turbulence * (flutterA * 0.65 + flutterB * 0.35);
-      const edgeGain = 0.22 + u * 0.78;
-      const windZ = windStrength * edgeGain * (0.95 + travellingWave * waveStrength * 0.72 + flutter * 0.28);
-      const windY = windStrength * (travellingWave * waveStrength * 0.08 + flutter * 0.06);
+      const edgeGain = 0.16 + u * 0.84;
+      const windZ = windStrength * edgeGain * (travellingWave * waveStrength * 0.9 + flutter * 0.2);
+      const windY = windStrength * (travellingWave * waveStrength * 0.045 + flutter * 0.035);
 
-      let forceX = 0;
+      // Streamwise airflow keeps the flag pulled away from the pinned edge.
+      // It is strongest during passive animation and intentionally much softer
+      // while grabbing so manual manipulation still feels unrestricted.
+      const streamTension = windStrength * (passive ? 2.8 : 0.3) * (0.35 + u * 0.65);
+      let forceX = streamTension;
       let forceY = -gravity * 2.2 + windY;
       let forceZ = windZ * 3.0;
 
       if (passive && flatness > 0) {
-        const recover = flatness * 11.0;
-        forceX += (rest[k] - curX) * recover * 0.22;
+        const recover = flatness * 12.0;
+        forceX += (rest[k] - curX) * recover * 0.32;
         forceY += (rest[k + 1] - curY) * recover * 0.16;
-        forceZ += (rest[k + 2] - curZ) * recover;
+        forceZ += (rest[k + 2] - curZ) * recover * 1.15;
       }
 
       p[k] = curX + velX + forceX * dt2;
@@ -400,17 +408,22 @@ export class ClothSim {
   private applyPassiveBounds() {
     const p = this.positions;
     const prev = this.prev;
-    const minX = -this.width * 0.56;
-    const maxX = this.width * 0.62;
+    const rest = this.rest;
     const minY = -this.height * 0.62;
     const maxY = this.height * 0.62;
-    const minZ = -this.width * 0.48;
-    const maxZ = this.width * 0.48;
-    const ease = 0.16;
+    const minZ = -this.width * 0.34;
+    const maxZ = this.width * 0.34;
+    const ease = 0.18;
 
     for (let i = 0; i < this.count; i++) {
       if (i % this.cols === 0) continue;
       const k = i * 3;
+
+      // Keep each passive column in a loose corridor around its flat X rest
+      // position. This preserves the full left-to-right flag profile without
+      // preventing depth waves; manual grabs bypass this entire method.
+      const minX = rest[k] - this.width * 0.085;
+      const maxX = rest[k] + this.width * 0.075;
       const tx = Math.min(maxX, Math.max(minX, p[k]));
       const ty = Math.min(maxY, Math.max(minY, p[k + 1]));
       const tz = Math.min(maxZ, Math.max(minZ, p[k + 2]));
