@@ -40,8 +40,8 @@ const TAU = Math.PI * 2;
 /**
  * Verlet cloth simulation adapted for a flag. The left edge stays pinned and
  * passive airflow is biased from left to right. Travelling waves oscillate
- * around the flat rest plane instead of continuously pushing the cloth to one
- * side, so the untouched flag keeps a broad, readable profile.
+ * around the flat rest plane while softer recovery and layered roll motion
+ * keep the flag broad without making the middle feel artificially pinned.
  */
 export class ClothSim {
   readonly cols: number;
@@ -287,6 +287,16 @@ export class ClothSim {
     const dt2 = SUBSTEP * SUBSTEP;
     const passive = this.grab === null;
 
+    // Two slow, layered oscillators slightly vary wave spacing and timing.
+    // Amplitude is unchanged, so the wave strength control still means the
+    // same thing while the cadence feels less mechanically repetitive.
+    const frequencyDrift = 1
+      + Math.sin(this.simTime * 0.31) * 0.075
+      + Math.sin(this.simTime * 0.73 + 1.9) * 0.035;
+    const wavePhase = this.simTime * 4.2
+      + Math.sin(this.simTime * 0.47) * 0.62
+      + Math.sin(this.simTime * 0.19 + 1.4) * 0.38;
+
     for (let i = 0; i < n; i++) {
       const k = i * 3;
       const curX = p[k], curY = p[k + 1], curZ = p[k + 2];
@@ -300,30 +310,53 @@ export class ClothSim {
       const u = col / Math.max(1, this.cols - 1);
       const v = row / Math.max(1, this.rows - 1);
 
-      // Coherent waves travel from the pinned edge (u=0) toward the free edge.
-      // There is deliberately no constant Z offset: depth movement oscillates
-      // around the flag plane instead of continuously folding it one way.
-      const travellingWave = Math.sin(u * waveFrequency * TAU - this.simTime * 4.2 + v * 0.4);
+      const travellingWave = Math.sin(
+        u * waveFrequency * frequencyDrift * TAU - wavePhase + v * 0.4,
+      );
       const flutterA = Math.sin(this.simTime * 7.1 + v * 14.0 - u * 5.0);
       const flutterB = Math.sin(this.simTime * 11.3 - v * 9.0 + u * 12.0);
       const flutter = turbulence * (flutterA * 0.65 + flutterB * 0.35);
-      const edgeGain = 0.16 + u * 0.84;
-      const windZ = windStrength * edgeGain * (travellingWave * waveStrength * 0.9 + flutter * 0.2);
-      const windY = windStrength * (travellingWave * waveStrength * 0.045 + flutter * 0.035);
 
-      // Streamwise airflow keeps the flag pulled away from the pinned edge.
-      // It is strongest during passive animation and intentionally much softer
-      // while grabbing so manual manipulation still feels unrestricted.
-      const streamTension = windStrength * (passive ? 2.8 : 0.3) * (0.35 + u * 0.65);
+      // Slower zero-mean rolls add the loose undulation that higher gravity
+      // previously revealed, but because they average around zero they do not
+      // add any permanent downward droop.
+      const rollA = Math.sin(
+        u * TAU * (1.28 + Math.sin(this.simTime * 0.21) * 0.08)
+        - this.simTime * 1.55 + v * 1.25,
+      );
+      const rollB = Math.sin(
+        u * TAU * 2.05 - this.simTime * 0.95 - v * 1.8
+        + Math.sin(this.simTime * 0.37) * 0.7,
+      );
+      const controlledRoll = (rollA * 0.68 + rollB * 0.32) * (0.28 + u * 0.72);
+
+      const edgeGain = 0.16 + u * 0.84;
+      const windZ = windStrength * edgeGain * (
+        travellingWave * waveStrength * 0.9
+        + flutter * 0.2
+        + controlledRoll * 0.26
+      );
+      const windY = windStrength * (
+        travellingWave * waveStrength * 0.045
+        + flutter * 0.035
+        + controlledRoll * 0.11
+      );
+
+      // Keep a left-to-right bias, but make it much weaker through the middle.
+      // The free edge gets more support so the design remains broadly visible.
+      const streamProfile = 0.12 + Math.pow(u, 1.75) * 0.88;
+      const streamTension = windStrength * (passive ? 1.85 : 0.3) * streamProfile;
       let forceX = streamTension;
       let forceY = -gravity * 2.2 + windY;
       let forceZ = windZ * 3.0;
 
       if (passive && flatness > 0) {
-        const recover = flatness * 12.0;
-        forceX += (rest[k] - curX) * recover * 0.32;
-        forceY += (rest[k + 1] - curY) * recover * 0.16;
-        forceZ += (rest[k + 2] - curZ) * recover * 1.15;
+        const recover = flatness * 11.0;
+        const freeEdgeGuard = Math.max(0, (u - 0.58) / 0.42);
+        const xRecovery = 0.11 + freeEdgeGuard * freeEdgeGuard * 0.27;
+        forceX += (rest[k] - curX) * recover * xRecovery;
+        forceY += (rest[k + 1] - curY) * recover * 0.095;
+        forceZ += (rest[k + 2] - curZ) * recover * 0.82;
       }
 
       p[k] = curX + velX + forceX * dt2;
@@ -409,21 +442,22 @@ export class ClothSim {
     const p = this.positions;
     const prev = this.prev;
     const rest = this.rest;
-    const minY = -this.height * 0.62;
-    const maxY = this.height * 0.62;
-    const minZ = -this.width * 0.34;
-    const maxZ = this.width * 0.34;
-    const ease = 0.18;
+    const minY = -this.height * 0.66;
+    const maxY = this.height * 0.66;
+    const minZ = -this.width * 0.42;
+    const maxZ = this.width * 0.42;
+    const ease = 0.12;
 
     for (let i = 0; i < this.count; i++) {
       if (i % this.cols === 0) continue;
       const k = i * 3;
+      const u = (i % this.cols) / Math.max(1, this.cols - 1);
 
-      // Keep each passive column in a loose corridor around its flat X rest
-      // position. This preserves the full left-to-right flag profile without
-      // preventing depth waves; manual grabs bypass this entire method.
-      const minX = rest[k] - this.width * 0.085;
-      const maxX = rest[k] + this.width * 0.075;
+      // The middle is deliberately loose. The free edge is kept a little
+      // tighter so the overall design remains legible most of the time.
+      const corridor = this.width * (0.145 - Math.pow(u, 2.4) * 0.055);
+      const minX = rest[k] - corridor;
+      const maxX = rest[k] + corridor * 0.9;
       const tx = Math.min(maxX, Math.max(minX, p[k]));
       const ty = Math.min(maxY, Math.max(minY, p[k + 1]));
       const tz = Math.min(maxZ, Math.max(minZ, p[k + 2]));
