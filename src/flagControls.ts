@@ -1,6 +1,10 @@
 import { RENDER_DEFAULTS } from './flagPresets.ts';
 
-export const FLAG_CONTROLS = {
+// DialKit contextually types slider arrays when they are inline. Keeping the
+// config in its own module is easier to maintain, so use a narrow boundary
+// cast here and keep the application values strongly shaped at runtime.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const FLAG_CONTROLS: any = {
   performance: {
     type: 'select' as const,
     options: ['High', 'Medium', 'Low'],
