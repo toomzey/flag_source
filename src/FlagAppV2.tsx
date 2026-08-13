@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { useDialKitController, DialRoot } from 'dialkit';
 import { HoloApp, type HoloParams } from './scene.ts';
 import { FLAG_CONTROLS } from './flagControls.ts';
+import { DEFAULT_FLAG_GZIP_BASE64 } from './defaultFlagData.ts';
 import {
   ENVIRONMENT_VALUES,
   FINISH_VALUES,
@@ -16,6 +17,31 @@ function loadImage(url: string): Promise<HTMLImageElement> {
     const img = new Image();
     img.onload = () => resolve(img);
     img.onerror = () => reject(new Error(`Unable to load ${url}`));
+    img.src = url;
+  });
+}
+
+async function loadEmbeddedDefaultFlag(): Promise<HTMLImageElement> {
+  const binary = atob(DEFAULT_FLAG_GZIP_BASE64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+
+  const decompressed = new Blob([bytes])
+    .stream()
+    .pipeThrough(new DecompressionStream('gzip'));
+  const svgText = await new Response(decompressed).text();
+  const url = URL.createObjectURL(new Blob([svgText], { type: 'image/svg+xml' }));
+
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(img);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('Unable to decode embedded default flag'));
+    };
     img.src = url;
   });
 }
@@ -68,7 +94,12 @@ export default function FlagAppV2() {
       dial.setValues({ images: { scale, rotation } } as never);
     };
 
-    const starter = loadImage('/default-flag.svg').catch(() => loadImage('/holo-bg-2.jpg'));
+    // The exact SVG supplied for this project is embedded as the primary
+    // starter artwork. File-based and legacy assets remain fallback paths only.
+    const starter = loadEmbeddedDefaultFlag()
+      .catch(() => loadImage('/default-flag.svg'))
+      .catch(() => loadImage('/holo-bg-2.jpg'));
+
     Promise.all([starter, loadImage('/bump-scratches.jpg')])
       .then(([artwork, bump]) => {
         if (appRef.current !== app) return;
