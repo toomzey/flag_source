@@ -297,6 +297,13 @@ export class ClothSim {
       + Math.sin(this.simTime * 0.47) * 0.62
       + Math.sin(this.simTime * 0.19 + 1.4) * 0.38;
 
+    // The wind source slowly wanders up and down the pinned edge. It never
+    // changes the stream direction: it only shifts where the strongest wave
+    // energy originates before that energy travels left-to-right across cloth.
+    const sourceY = 0.5
+      + Math.sin(this.simTime * 0.23 + 0.6) * 0.18
+      + Math.sin(this.simTime * 0.61 + 2.1) * 0.07;
+
     for (let i = 0; i < n; i++) {
       const k = i * 3;
       const curX = p[k], curY = p[k + 1], curZ = p[k + 2];
@@ -309,12 +316,15 @@ export class ClothSim {
       const row = Math.floor(i / this.cols);
       const u = col / Math.max(1, this.cols - 1);
       const v = row / Math.max(1, this.rows - 1);
+      const sourceOffset = v - sourceY;
+      const verticalPhase = sourceOffset * (1.05 + Math.sin(this.simTime * 0.29) * 0.2);
+      const sourceBand = 0.94 + Math.exp(-(sourceOffset * sourceOffset) / 0.055) * 0.12;
 
       const travellingWave = Math.sin(
-        u * waveFrequency * frequencyDrift * TAU - wavePhase + v * 0.4,
+        u * waveFrequency * frequencyDrift * TAU - wavePhase + verticalPhase,
       );
-      const flutterA = Math.sin(this.simTime * 7.1 + v * 14.0 - u * 5.0);
-      const flutterB = Math.sin(this.simTime * 11.3 - v * 9.0 + u * 12.0);
+      const flutterA = Math.sin(this.simTime * 7.1 + sourceOffset * 14.0 - u * 5.0);
+      const flutterB = Math.sin(this.simTime * 11.3 - sourceOffset * 9.0 + u * 12.0);
       const flutter = turbulence * (flutterA * 0.65 + flutterB * 0.35);
 
       // Slower zero-mean rolls add the loose undulation that higher gravity
@@ -332,12 +342,12 @@ export class ClothSim {
 
       const edgeGain = 0.16 + u * 0.84;
       const windZ = windStrength * edgeGain * (
-        travellingWave * waveStrength * 0.9
+        travellingWave * waveStrength * 0.9 * sourceBand
         + flutter * 0.2
         + controlledRoll * 0.26
       );
       const windY = windStrength * (
-        travellingWave * waveStrength * 0.045
+        travellingWave * waveStrength * 0.045 * sourceBand
         + flutter * 0.035
         + controlledRoll * 0.11
       );
