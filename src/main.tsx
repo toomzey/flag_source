@@ -1,5 +1,5 @@
 import { createRoot } from 'react-dom/client';
 import 'dialkit/styles.css';
-import App from './App.tsx';
+import FlagApp from './FlagApp.tsx';
 
-createRoot(document.getElementById('root')!).render(<App />);
+createRoot(document.getElementById('root')!).render(<FlagApp />);
